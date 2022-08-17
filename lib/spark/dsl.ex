@@ -25,12 +25,28 @@ defmodule Spark.Dsl do
       Default values for single extension kinds are overwritten if specified by the implementor, while many extension
       kinds are appended to if specified by the implementor.
       """
+    ],
+    generator_name: [
+      type: :string,
+      doc: "The name when using with mix spark.gen"
+    ],
+    generator_includes_otp_app?: [
+      type: :boolean,
+      doc: "Wether or not to pass the otp app in the opts when generating an instance of this."
+    ],
+    create_options: [
+      type: :keyword_list,
+      default: [],
+      doc:
+        "An OptionParser compatible keyword list, like `switches: [api: :string]`, for additional options the generator takes"
     ]
   ]
 
   @type entity :: %Spark.Dsl.Entity{}
 
   @type section :: %Spark.Dsl.Section{}
+
+  @type t :: module
 
   @moduledoc """
   The primary entry point for adding a DSL to a module.
@@ -55,10 +71,24 @@ defmodule Spark.Dsl do
   persist multiple times.
   """
   @callback handle_opts(Keyword.t()) :: Macro.t()
+
   @doc """
   Handle options in the context of the module, after all extensions have been processed. Must return a `quote` block.
   """
   @callback handle_before_compile(Keyword.t()) :: Macro.t()
+
+  @doc """
+  Determine the module name and file path for a given generated entity
+  """
+  @callback module_and_file_name(name :: String.t(), base :: atom, opts :: any) ::
+              {module, String.t()}
+
+  @doc """
+  Spark patches to apply after this is created.
+  """
+  @callback after_create(file :: String.t(), module :: module()) :: list(Spark.Patch.Command.t())
+
+  @optional_callbacks [module_and_file_name: 3, after_create: 2]
 
   defmacro __using__(opts) do
     opts = Spark.OptionsHelpers.validate!(opts, @using_schema)
@@ -91,6 +121,7 @@ defmodule Spark.Dsl do
       Module.register_attribute(__MODULE__, :spark_dsl, persist: true)
       Module.register_attribute(__MODULE__, :spark_default_extensions, persist: true)
       Module.register_attribute(__MODULE__, :spark_extension_kinds, persist: true)
+      @behaviour Spark.Dsl
       @spark_dsl true
       @spark_default_extensions parent_opts[:default_extensions]
                                 |> Keyword.values()
@@ -101,6 +132,14 @@ defmodule Spark.Dsl do
       def init(opts), do: {:ok, opts}
 
       def default_extensions, do: @spark_default_extensions
+      def default_extension_keys, do: unquote(parent_opts[:default_extensions])
+      def extension_kinds, do: @spark_extension_kinds
+      def single_extension_kinds, do: unquote(parent_opts[:single_extension_kinds])
+      def many_extension_kinds, do: unquote(parent_opts[:many_extension_kinds])
+
+      def generator_name, do: unquote(parent_opts[:generator_name])
+      def generator_includes_otp_app?, do: unquote(parent_opts[:generator_includes_otp_app?])
+      def create_options, do: unquote(parent_opts[:create_options])
 
       def handle_opts(opts) do
         quote do
@@ -112,12 +151,15 @@ defmodule Spark.Dsl do
         end
       end
 
-      defoverridable init: 1, handle_opts: 1, handle_before_compile: 1
+      def after_create(_, _), do: []
+
+      defoverridable init: 1, handle_opts: 1, handle_before_compile: 1, after_create: 2
 
       defmacro __using__(opts) do
         parent = unquote(parent)
         parent_opts = unquote(parent_opts)
         their_opt_schema = unquote(their_opt_schema)
+
         require Spark.Dsl.Extension
 
         {opts, extensions} =
